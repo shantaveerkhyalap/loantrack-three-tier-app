@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoanTrack Application</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f4f4f9; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; }
+        form { margin-bottom: 30px; display: flex; flex-direction: column; gap: 10px; }
+        input { padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #004494; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        .served-by { font-size: 0.9em; color: #666; margin-top: 10px; text-align: right; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>LoanTrack Dashboard</h1>
+        
+        <h2>Add a New Loan</h2>
+        <form id="loanForm">
+            <input type="text" id="borrowerName" placeholder="Borrower Name" required>
+            <input type="number" id="loanAmount" placeholder="Loan Amount" step="0.01" required>
+            <input type="text" id="propertyCity" placeholder="Property City" required>
+            <button type="submit">Submit Loan</button>
+        </form>
+
+        <h2>Current Loans</h2>
+        <button onclick="fetchLoans()">Refresh Loans</button>
+        <table id="loansTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Borrower Name</th>
+                    <th>Amount</th>
+                    <th>City</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Rows populated by JS -->
+            </tbody>
+        </table>
+        <div class="served-by" id="servedBy"></div>
+    </div>
+
+    <script>
+        // Use a relative path so it works seamlessly whether behind an Ingress, Nginx proxy, or local port forwarding
+        // We'll configure Nginx in the Docker setup to route /api to the backend
+        const API_URL = '/api'; 
+
+        async function fetchLoans() {
+            try {
+                const response = await fetch(`${API_URL}/loans`);
+                const data = await response.json();
+                
+                const tbody = document.querySelector('#loansTable tbody');
+                tbody.innerHTML = '';
+                
+                data.loans.forEach(loan => {
+                    const row = `<tr>
+                        <td>${loan.id}</td>
+                        <td>${loan.borrower_name}</td>
+                        <td>$${loan.loan_amount.toFixed(2)}</td>
+                        <td>${loan.property_city}</td>
+                        <td>${loan.status}</td>
+                    </tr>`;
+                    tbody.innerHTML += row;
+                });
+
+                document.getElementById('servedBy').innerText = `Data served by pod: ${data.served_by || 'unknown'}`;
+            } catch (error) {
+                console.error("Error fetching loans:", error);
+            }
+        }
+
+        document.getElementById('loanForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const loanData = {
+                borrower_name: document.getElementById('borrowerName').value,
+                loan_amount: parseFloat(document.getElementById('loanAmount').value),
+                property_city: document.getElementById('propertyCity').value
+            };
+
+            try {
+                const response = await fetch(`${API_URL}/loans`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(loanData)
+                });
+                if(response.ok) {
+                    document.getElementById('loanForm').reset();
+                    fetchLoans();
+                }
+            } catch (error) {
+                console.error("Error creating loan:", error);
+            }
+        });
+
+        // Fetch loans on page load
+        window.onload = fetchLoans;
+    </script>
+</body>
+</html>
