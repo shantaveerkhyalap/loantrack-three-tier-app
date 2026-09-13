@@ -1,50 +1,95 @@
 #!/usr/bin/env bash
 
-# ------------------------------------------------------------
-# LoanTrack one‑click deployment script
-# ------------------------------------------------------------
-# This script applies the Kubernetes manifests that compose the
-# LoanTrack three‑tier application. It assumes you have a cluster
-# (e.g., minikube, kind, or a remote cluster) with kubectl
-# configured and that the required Docker images are already built
-# and available to the cluster (either via a local registry or
-# Docker Desktop's internal registry).
-# ------------------------------------------------------------
+# ============================================================
+# LoanTrack — one-command deploy script (E2)
+# ============================================================
+# Usage:  ./scripts/deploy.sh
+#
+# Prerequisites:
+#   • minikube running  →  minikube start
+#   • kubectl configured to the minikube context
+#   • k8s/secret.yaml present (copy from k8s/secret.example.yaml
+#     and fill in real values — never commit the real file)
+#
+# This script is idempotent: running it a second time is safe.
+# ============================================================
 
 set -euo pipefail
 
-# Optional: build Docker images locally (requires Docker)
-# Uncomment the lines below if you want the script to rebuild the images.
-# echo "Building Docker images..."
-# docker build -t loantrack-backend:latest ./backend
-# docker build -t loantrack-frontend:latest ./frontend
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Apply the namespace (creates it if it does not exist)
-kubectl apply -f k8s/namespace.yaml
+# ── 0. Sanity checks ─────────────────────────────────────────
+if ! command -v minikube &>/dev/null; then
+  echo "❌  minikube not found. Install it first: https://minikube.sigs.k8s.io/docs/start/"
+  exit 1
+fi
 
-# Apply ConfigMap and Secret (you may need to replace the placeholder values)
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/secret.example.yaml
+if ! command -v kubectl &>/dev/null; then
+  echo "❌  kubectl not found."
+  exit 1
+fi
 
-# Deploy PostgreSQL (StatefulSet + Service)
-kubectl apply -f k8s/postgres-statefulset.yaml
-kubectl apply -f k8s/postgres-service.yaml
+if [[ ! -f "${REPO_ROOT}/k8s/secret.yaml" ]]; then
+  echo "❌  k8s/secret.yaml not found."
+  echo "    Copy k8s/secret.example.yaml → k8s/secret.yaml and fill in real credentials."
+  exit 1
+fi
 
-# Deploy Backend and Frontend workloads
-kubectl apply -f k8s/backend-deployment.yaml
-kubectl apply -f k8s/backend-service.yaml
-kubectl apply -f k8s/frontend-deployment.yaml
-kubectl apply -f k8s/frontend-service.yaml
+echo "🔧  Pointing Docker CLI at minikube's internal daemon..."
+eval "$(minikube docker-env)"
 
-# Wait for all pods to become ready (simple check)
-echo "Waiting for pods to be ready..."
-kubectl wait --for=condition=ready pod -l app=postgres --timeout=120s || true
-kubectl wait --for=condition=ready pod -l app=backend --timeout=120s || true
-kubectl wait --for=condition=ready pod -l app=frontend --timeout=120s || true
+# ── 1. Build Docker images inside minikube ───────────────────
+echo ""
+echo "🐳  Building loantrack-backend:latest ..."
+docker build -t loantrack-backend:latest "${REPO_ROOT}/backend"
 
-echo "✅ Deployment completed."
+echo ""
+echo "🐳  Building loantrack-frontend:latest ..."
+docker build -t loantrack-frontend:latest "${REPO_ROOT}/frontend"
 
-# Optional: expose the frontend via NodePort (already defined in the Service)
-# To get the URL, run:
-#   kubectl get svc frontend -n loantrack -o jsonpath='{.spec.ports[0].nodePort}'
-#   echo "http://$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\").address}'):<nodePort>"
+# ── 2. Apply manifests in dependency order ───────────────────
+echo ""
+echo "📦  Applying Kubernetes manifests..."
+
+kubectl apply -f "${REPO_ROOT}/k8s/namespace.yaml"
+
+kubectl apply -f "${REPO_ROOT}/k8s/configmap.yaml"
+kubectl apply -f "${REPO_ROOT}/k8s/secret.yaml"
+kubectl apply -f "${REPO_ROOT}/k8s/postgres-init-configmap.yaml"
+
+kubectl apply -f "${REPO_ROOT}/k8s/postgres-statefulset.yaml"
+kubectl apply -f "${REPO_ROOT}/k8s/postgres-service.yaml"
+
+kubectl apply -f "${REPO_ROOT}/k8s/backend-deployment.yaml"
+kubectl apply -f "${REPO_ROOT}/k8s/backend-service.yaml"
+
+kubectl apply -f "${REPO_ROOT}/k8s/frontend-deployment.yaml"
+kubectl apply -f "${REPO_ROOT}/k8s/frontend-service.yaml"
+
+# ── 3. Wait for rollouts ─────────────────────────────────────
+echo ""
+echo "⏳  Waiting for PostgreSQL to be ready (up to 3 min)..."
+kubectl rollout status statefulset/postgres -n loantrack --timeout=180s
+
+echo "⏳  Waiting for backend rollout..."
+kubectl rollout status deployment/backend -n loantrack --timeout=120s
+
+echo "⏳  Waiting for frontend rollout..."
+kubectl rollout status deployment/frontend -n loantrack --timeout=120s
+
+# ── 4. Print access URL ──────────────────────────────────────
+echo ""
+echo "✅  Deployment complete!"
+echo ""
+
+NODE_IP=$(minikube ip)
+NODE_PORT=$(kubectl get svc frontend -n loantrack \
+  -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30080")
+
+echo "🌐  Open the app at:  http://${NODE_IP}:${NODE_PORT}"
+echo ""
+echo "    Or run:  minikube service frontend -n loantrack --url"
+echo ""
+echo "📋  Cluster overview:"
+kubectl get all -n loantrack
