@@ -1,6 +1,13 @@
 node_modules/
 __pycache__/
+*.pyc
+*.pyo
 .env
 .venv/
 build/
+dist/
 db-data/
+postgres-data/
+
+# Kubernetes real secret — NEVER commit this
+k8s/secret.yaml
